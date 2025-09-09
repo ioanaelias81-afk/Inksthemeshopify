@@ -1,0 +1,168 @@
+// announcement-bar.js
+class AnnouncementRotator extends HTMLElement {
+  #controller = null;
+  #viewport;
+  #closeBtn;
+  #messages = [];
+  #index = 0;
+  #timer = null;
+
+  connectedCallback() {
+    this.#controller?.abort();
+    this.#controller = new AbortController();
+    const { signal } = this.#controller;
+
+    this.#viewport = this.querySelector('.annc__viewport');
+    this.#closeBtn = this.querySelector('.annc__close');
+
+    try {
+      this.#messages = JSON.parse(this.dataset.messages || '[]');
+    } catch {
+      this.#messages = [];
+    }
+
+    const dismissible = this.dataset.dismissible === 'true';
+    const storageKey = this.dataset.storageKey;
+    const rotate = this.dataset.rotate === 'true';
+    const interval = Math.max(2000, parseInt(this.dataset.interval || '6000', 10));
+
+    // Dismiss restore
+    if (dismissible && storageKey && localStorage.getItem(storageKey) === '1') {
+      this.style.display = 'none';
+      return;
+    }
+
+    // Build items
+    this.#renderItems();
+
+    // Close button
+    if (dismissible) {
+      this.#closeBtn.hidden = false;
+      this.#closeBtn.addEventListener('click', () => {
+        if (storageKey) localStorage.setItem(storageKey, '1');
+        this.style.display = 'none';
+      }, { signal });
+    }
+
+    // Rotate if >1 message
+    if (rotate && this.#messages.length > 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      this.#start(interval);
+      if (this.dataset.pauseOnHover === 'true') {
+        this.addEventListener('mouseenter', () => this.#stop(), { signal });
+        this.addEventListener('mouseleave', () => this.#start(interval), { signal });
+        this.addEventListener('focusin', () => this.#stop(), { signal });
+        this.addEventListener('focusout', () => this.#start(interval), { signal });
+      }
+    }
+  }
+
+  disconnectedCallback() {
+    this.#stop();
+    this.#controller?.abort();
+  }
+
+  #start(ms) {
+    this.#stop();
+    this.#timer = window.setInterval(() => this.#next(), ms);
+  }
+  #stop() {
+    if (this.#timer) {
+      clearInterval(this.#timer);
+      this.#timer = null;
+    }
+  }
+  #next() {
+    const items = this.#viewport.querySelectorAll('.annc__item');
+    if (!items.length) return;
+    items[this.#index]?.setAttribute('aria-hidden', 'true');
+    items[this.#index]?.classList.remove('is-active');
+    this.#index = (this.#index + 1) % items.length;
+    items[this.#index]?.setAttribute('aria-hidden', 'false');
+    items[this.#index]?.classList.add('is-active');
+  }
+
+  #renderItems() {
+    this.#viewport.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'annc__list';
+    list.setAttribute('role', 'list');
+
+    this.#messages.forEach((m, i) => {
+      const item = document.createElement('div');
+      item.className = 'annc__item';
+      item.setAttribute('role', 'listitem');
+      item.setAttribute('aria-hidden', i === 0 ? 'false' : 'true');
+
+      const content = document.createElement(m.link ? 'a' : 'div');
+      if (m.link) {
+        content.href = m.link;
+        content.className = 'annc__link';
+      }
+      content.classList.add('annc__content');
+      content.setAttribute('tabindex', '0');
+      if (m.ariaLabel) content.setAttribute('aria-label', m.ariaLabel);
+
+      if (m.badge) {
+        const badge = document.createElement('span');
+        badge.className = 'annc__badge';
+        badge.textContent = m.badge;
+        content.appendChild(badge);
+      }
+      if (m.icon) {
+        const icon = document.createElement('span');
+        icon.className = 'annc__icon';
+        icon.textContent = m.icon;
+        icon.setAttribute('aria-hidden', 'true');
+        content.appendChild(icon);
+      }
+
+      // Text (rich) — safe because Liquid already escaped into JSON; renders as HTML
+      const textWrap = document.createElement('span');
+      textWrap.className = 'annc__text';
+      textWrap.innerHTML = m.text || '';
+      content.appendChild(textWrap);
+
+      // Optional countdown
+      if (m.countdownTo) {
+        const cd = document.createElement('span');
+        cd.className = 'annc__countdown';
+        cd.setAttribute('data-deadline', m.countdownTo);
+        content.appendChild(cd);
+        this.#initCountdown(cd);
+      }
+
+      item.appendChild(content);
+      list.appendChild(item);
+    });
+
+    this.#viewport.appendChild(list);
+    const first = this.#viewport.querySelector('.annc__item');
+    if (first) first.classList.add('is-active');
+  }
+
+  #initCountdown(node) {
+    const deadline = new Date(node.getAttribute('data-deadline'));
+    if (isNaN(+deadline)) {
+      node.remove();
+      return;
+    }
+    const update = () => {
+      const diff = +deadline - Date.now();
+      if (diff <= 0) {
+        node.textContent = '00:00:00';
+        return;
+      }
+      const h = Math.floor(diff / 3_600_000);
+      const m = Math.floor((diff % 3_600_000) / 60_000);
+      const s = Math.floor((diff % 60_000) / 1000);
+      node.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    };
+    update();
+    const t = setInterval(update, 1000);
+    this.#controller.signal.addEventListener('abort', () => clearInterval(t), { once: true });
+  }
+}
+
+if (!customElements.get('announcement-rotator')) {
+  customElements.define('announcement-rotator', AnnouncementRotator);
+}
