@@ -1,106 +1,117 @@
 import { mediaQueryLarge, isMobileBreakpoint } from '@theme/utilities';
 
-// Accordion
 class AccordionCustom extends HTMLElement {
-  /** @type {HTMLDetailsElement} */
+  // --- Element getters (safe) ---
+  /** @returns {HTMLDetailsElement|null} */
   get details() {
-    const details = this.querySelector('details');
-
-    if (!(details instanceof HTMLDetailsElement)) throw new Error('Details element not found');
-
-    return details;
+    const el = this.querySelector('details');
+    return el instanceof HTMLDetailsElement ? el : null;
   }
 
-  /** @type {HTMLElement} */
+  /** @returns {HTMLElement|null} */
   get summary() {
-    const summary = this.details.querySelector('summary');
+    const d = this.details;
+    if (!d) return null;
+    const s = d.querySelector('summary');
+    return s instanceof HTMLElement ? s : null;
+  }
 
-    if (!(summary instanceof HTMLElement)) throw new Error('Summary element not found');
-
-    return summary;
+  // --- Robust boolean parsing for data-attrs ---
+  /** @returns {boolean} */
+  #parseBool(val) {
+    if (val === '' || val === undefined) return false; // attribute absent
+    const s = String(val).toLowerCase();
+    return s === 'true' || s === '1';
   }
 
   get #disableOnMobile() {
-    return this.dataset.disableOnMobile === 'true';
+    return this.#parseBool(this.dataset.disableOnMobile);
   }
-
   get #disableOnDesktop() {
-    return this.dataset.disableOnDesktop === 'true';
+    return this.#parseBool(this.dataset.disableOnDesktop);
   }
-
   get #closeWithEscape() {
-    return this.dataset.closeWithEscape === 'true';
+    return this.#parseBool(this.dataset.closeWithEscape);
   }
 
-  #controller = new AbortController();
+  // --- Controller lifecycle ---
+  /** @type {AbortController | null} */
+  #controller = null;
 
   connectedCallback() {
+    // Recreate controller every time we connect (fixes "aborted signal" bug on reattach)
+    this.#controller?.abort();
+    this.#controller = new AbortController();
     const { signal } = this.#controller;
+
+    // If structure is missing, fail gracefully (don’t throw in production)
+    if (!this.details || !this.summary) {
+      console.warn('[accordion-custom] Missing <details> or <summary> inside component.', this);
+      return;
+    }
 
     this.#setDefaultOpenState();
 
+    // Events
     this.addEventListener('keydown', this.#handleKeyDown, { signal });
-    this.summary.addEventListener('click', this.handleClick, { signal });
-    mediaQueryLarge.addEventListener('change', this.#handleMediaQueryChange, { signal });
-  }
+    this.summary.addEventListener('click', this.#handleSummaryClick, { signal });
 
-  /**
-   * Handles the disconnect event.
-   */
-  disconnectedCallback() {
-    // Disconnect all the event listeners
-    this.#controller.abort();
-  }
-
-  /**
-   * Handles the click event.
-   * @param {Event} event - The event.
-   */
-  handleClick = (event) => {
-    const isMobile = isMobileBreakpoint();
-    const isDesktop = !isMobile;
-
-    // Stop default behaviour from the browser
-    if ((isMobile && this.#disableOnMobile) || (isDesktop && this.#disableOnDesktop)) {
-      event.preventDefault();
-      return;
+    // Media query listener (guard if utilities not present)
+    try {
+      mediaQueryLarge?.addEventListener?.('change', this.#handleMediaQueryChange, { signal });
+    } catch (e) {
+      // non-fatal
     }
-  };
+  }
 
-  /**
-   * Handles the media query change event.
-   */
+  disconnectedCallback() {
+    // Abort detaches all listeners bound with { signal }
+    this.#controller?.abort();
+  }
+
+  // React to attribute flips at runtime (e.g., toggling defaults via DOM)
+  static get observedAttributes() {
+    return ['open-by-default-on-mobile', 'open-by-default-on-desktop', 'data-disable-on-mobile', 'data-disable-on-desktop'];
+  }
+  attributeChangedCallback() {
+    this.#setDefaultOpenState();
+  }
+
+  // --- Handlers ---
   #handleMediaQueryChange = () => {
     this.#setDefaultOpenState();
   };
 
-  /**
-   * Sets the default open state of the accordion based on the `open-by-default-on-mobile` and `open-by-default-on-desktop` attributes.
-   */
-  #setDefaultOpenState() {
-    const isMobile = isMobileBreakpoint();
+  #handleSummaryClick = (event) => {
+    const isMobile = isMobileBreakpoint?.() ?? false;
+    const isDesktop = !isMobile;
 
-    this.details.open =
-      (isMobile && this.hasAttribute('open-by-default-on-mobile')) ||
-      (!isMobile && this.hasAttribute('open-by-default-on-desktop'));
-  }
+    // Block toggling when disabled for the current breakpoint
+    if ((isMobile && this.#disableOnMobile) || (isDesktop && this.#disableOnDesktop)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    // Otherwise let <details>/<summary> do their native toggle
+  };
 
-  /**
-   * Handles keydown events for the accordion
-   *
-   * @param {KeyboardEvent} event - The keyboard event.
-   */
-  #handleKeyDown(event) {
-    // Close the accordion when used as a menu
+  // Arrow function so `this` is always the custom element
+  #handleKeyDown = (event) => {
+    if (!this.details || !this.summary) return;
+
+    // Close with ESC when used as a menu/dropdown
     if (event.key === 'Escape' && this.#closeWithEscape) {
       event.preventDefault();
-
       this.details.open = false;
-      this.summary.focus();
+      // Return focus to the control
+      this.summary.focus?.();
     }
-  }
-}
+  };
 
-if (!customElements.get('accordion-custom')) {
-  customElements.define('accordion-custom', AccordionCustom);
-}
+  // --- Behavior ---
+  #setDefaultOpenState() {
+    if (!this.details) return;
+    const isMobile = isMobileBreakpoint?.() ?? false;
+
+    const openOnMobile = this.hasAttribute('open-by-default-on-mobile');
+    const openOnDesktop = this.hasAt
