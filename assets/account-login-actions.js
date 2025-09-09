@@ -1,34 +1,86 @@
 /**
- * A custom element that manages the account login actions.
+ * <account-login-actions>
+ * Enhances an inner <shop-login-button> when present.
  *
- * @extends {HTMLElement}
+ * Data attributes on <account-login-actions> override defaults:
+ *   data-full-width="true|false"
+ *   data-persist="true|false"
+ *   data-analytics-context="loginWithShopSelfServe"
+ *   data-flow-version="account-actions-popover"
+ *   data-return-uri="<absolute-or-relative-url>"
  */
 class AccountLoginActions extends HTMLElement {
-  /**
-   * @type {Element | null}
-   */
-  shopLoginButton = null;
+  /** @type {AbortController | null} */
+  #controller = null;
+  /** @type {MutationObserver | null} */
+  #observer = null;
 
-  connectedCallback() {
-    this.shopLoginButton = this.querySelector('shop-login-button');
+  /** @type {HTMLElement | null} */
+  get button() {
+    const el = this.querySelector('shop-login-button');
+    return el instanceof HTMLElement ? el : null;
+  }
 
-    if (this.shopLoginButton) {
-      // We don't have control over the shop-login-button markup, so we need to set additional attributes here
-      this.shopLoginButton.setAttribute('full-width', 'true');
-      this.shopLoginButton.setAttribute('persist-after-sign-in', 'true');
-      // Do this only if New Customer Account is ALWAYS the sign in option (and never Classic Customer Account)
-      this.shopLoginButton.setAttribute('analytics-context', 'loginWithShopSelfServe');
-      this.shopLoginButton.setAttribute('flow-version', 'account-actions-popover');
-      this.shopLoginButton.setAttribute('return-uri', window.location.href);
+  // ---- utils ----
+  #parseBool(v, fallback = true) {
+    if (v == null) return fallback;
+    const s = String(v).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === '';
+  }
 
-      // Reload the page after the login is completed, otherwise the page state is incorrect
-      this.shopLoginButton.addEventListener('completed', () => {
-        window.location.reload();
-      });
+  #setIf(value, setter) {
+    if (value != null && value !== '') setter(String(value));
+  }
+
+  #computeReturnUri() {
+    // Default to current URL without hash (avoids odd scroll positions)
+    const provided = this.dataset.returnUri;
+    if (provided) return provided;
+    try {
+      const u = new URL(window.location.href);
+      u.hash = ''; // strip fragment
+      return u.toString();
+    } catch {
+      return window.location.pathname || '/';
     }
   }
-}
 
-if (!customElements.get('account-login-actions')) {
-  customElements.define('account-login-actions', AccountLoginActions);
-}
+  connectedCallback() {
+    // Recreate controller each connect (important if element is reattached)
+    this.#controller?.abort();
+    this.#controller = new AbortController();
+    const { signal } = this.#controller;
+
+    // Try to enhance immediately…
+    this.#enhance();
+
+    // …and watch for late-mounted <shop-login-button>
+    if (!this.button && !this.#observer) {
+      this.#observer = new MutationObserver(() => this.#enhance());
+      this.#observer.observe(this, { childList: true, subtree: true });
+    }
+
+    // Ensure observer is cleaned up on disconnect
+    signal.addEventListener('abort', () => {
+      this.#observer?.disconnect();
+      this.#observer = null;
+    });
+  }
+
+  disconnectedCallback() {
+    this.#controller?.abort();
+  }
+
+  // If these change at runtime, re-enhance
+  static get observedAttributes() {
+    return ['data-full-width', 'data-persist', 'data-analytics-context', 'data-flow-version', 'data-return-uri'];
+  }
+  attributeChangedCallback() {
+    this.#enhance();
+  }
+
+  #enhance() {
+    const btn = this.button;
+    if (!btn) return;
+
+    // Apply attributes with
